@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SendgikoskiLabs NetCheck v3.1
+SendgikoskiLabs NetCheck v3.2
 ==============================
 A self-contained network diagnostic and monitoring tool.
 
@@ -25,6 +25,8 @@ Features:
 Changelog:
   v3.1 - Fixed Ctrl+C traceback in monitor mode (signal handler)
          Added subnet-aware IP change detection to suppress anycast noise
+  v3.2 - Fixed negative elapsed time in 'all' command
+         Added NAT/firewall/WSL2 path-obscuration warning in traceroute results
 
 Requires: Python 3.8+, stdlib only EXCEPT 'requests' (pip install requests)
 Run:
@@ -62,7 +64,7 @@ except ImportError:
     HAS_REQUESTS = False
 
 # ─── Constants ──────────────────────────────────────────────────────────────
-VERSION = "3.1"
+VERSION = "3.2"
 TOOL_NAME = "SendgikoskiLabs NetCheck"
 
 DEFAULT_HOSTS = [
@@ -125,6 +127,7 @@ class TracerouteResult:
     slowest_hop: Optional[str]
     slowest_ms: float
     success: bool
+    nat_warning: bool = False          # True when path appears obscured by NAT/firewall
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
 
 
@@ -309,6 +312,12 @@ class NetDiag:
                         slowest_ms = peak
                         slowest_hop = line.strip()
 
+            # ── NAT / firewall / WSL2 path obscuration detection ────────
+            # Heuristic: only 1-2 visible hops AND significant filtered hops
+            # strongly suggests a NAT layer or hypervisor is eating probes
+            # before they reach the public internet.
+            nat_warning = (len(hops) <= 2 and filtered_hops >= 3)
+
             return TracerouteResult(
                 host=host,
                 hops=hops,
@@ -316,6 +325,7 @@ class NetDiag:
                 slowest_hop=slowest_hop,
                 slowest_ms=slowest_ms,
                 success=bool(hops),
+                nat_warning=nat_warning,
             )
         except Exception as e:
             return TracerouteResult(host, [], 0, None, 0.0, False)
@@ -511,6 +521,19 @@ def format_traceroute(r: TracerouteResult) -> str:
         lines.append(f"  {hop['hop']:<5} {hop['ip']:<18} {avg:>8}")
     if r.filtered_hops:
         lines.append(f"\n  ⚠  {r.filtered_hops} hop(s) did not respond (filtered by ISP)")
+    if r.nat_warning:
+        lines.append(f"\n  ╔══════════════════════════════════════════════════════╗")
+        lines.append(f"  ║  ⚠  PATH OBSCURATION WARNING                        ║")
+        lines.append(f"  ╠══════════════════════════════════════════════════════╣")
+        lines.append(f"  ║  Only {len(r.hops)} hop(s) visible before the path goes dark.  ║")
+        lines.append(f"  ║  This typically means one or more of the following:  ║")
+        lines.append(f"  ║    • Running inside WSL2 / Hyper-V / a VM            ║")
+        lines.append(f"  ║    • Double-NAT (router behind router)               ║")
+        lines.append(f"  ║    • ISP or corporate firewall blocking all probes   ║")
+        lines.append(f"  ║  Traceroute results beyond hop {len(r.hops)} are unreliable.  ║")
+        lines.append(f"  ║  For accurate path data, run from a bare-metal host  ║")
+        lines.append(f"  ║  or a cloud VPS with direct internet routing.        ║")
+        lines.append(f"  ╚══════════════════════════════════════════════════════╝")
     if r.slowest_hop and r.slowest_ms > SLOW_HOP_THRESHOLD:
         lines.append(f"\n  ⚠  Possible bottleneck detected at {r.slowest_ms:.1f} ms:")
         lines.append(f"     {r.slowest_hop}")
@@ -688,8 +711,8 @@ def run_cli(args):
         print(json.dumps(asdict(r), indent=2) if args.json else format_traceroute(r))
 
     elif args.command == "all":
-        print(f"\n{TOOL_NAME} v{VERSION}  —  All Hosts\n{'═'*60}")
         t0 = time.time()
+        print(f"\n{TOOL_NAME} v{VERSION}  —  All Hosts\n{'═'*60}")
         for host in DEFAULT_HOSTS:
             r = NetDiag.full_check(host)
             log_check(r)
