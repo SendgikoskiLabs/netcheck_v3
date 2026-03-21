@@ -19,24 +19,35 @@ Built by [Alan Sendgikoski](https://www.linkedin.com/in/alansendgikoski/) as par
 
 ---
 
-## Screenshot
+## Screenshots
 
-```
-╔══════════════════════════════════════════════════════════╗
-║      HOST CHECK  —  ✓ OK                                 ║
-╚══════════════════════════════════════════════════════════╝
-  Host             : github.com
-  Resolved IP      : 140.82.114.3
-  ASN              : AS36459
-  Provider         : GitHub, Inc.
-  Location         : South Riding, Virginia, US
-  DNS Resolve      : 6.06 ms
-  TCP Connect      : 51.10 ms  [OK]
-  TLS Handshake    : 111.44 ms
-  HTTP Status      : 200 [OK]
-  Redirect To      : N/A
-  Total Time       : 504.19 ms
-```
+### Monitor Tab
+![Monitor](docs/screenshots/gui_monitor.png)
+*Continuous multi-host monitoring with live DNS, TCP, TLS, and HTTP metrics. IP change alerts fire automatically when routing crosses a subnet boundary.*
+
+### Full Check Tab
+![Full Check](docs/screenshots/gui_fullcheck.png)
+*Full diagnostic for a single host — DNS resolution, TCP connect, TLS handshake, HTTP status, ASN, ISP, and geolocation in one shot.*
+
+### Ping Tab
+![Ping](docs/screenshots/gui_ping.png)
+*ICMP ping with min/avg/max latency, jitter (std dev), and packet loss. Results logged to the status bar.*
+
+### Traceroute Tab
+![Traceroute](docs/screenshots/gui_traceroute.png)
+*Traceroute with automatic PATH OBSCURATION WARNING — detects WSL2, Hyper-V, double-NAT, and firewall environments where results are unreliable.*
+
+### About Tab
+![About](docs/screenshots/gui_about.png)
+*Built-in reference for CLI usage, features, dependencies, and the SendgikoskiLabs suite roadmap.*
+
+### Export
+![Monitor Export](docs/screenshots/gui_monitorexport.png)
+*Every tab includes an Export button. Monitor sessions are saved with an auto-generated timestamped filename.*
+
+### CSV Log File
+![Monitor Log File](docs/screenshots/gui_logfile.png)
+*All checks are automatically logged to `logs/netcheck_log.csv` — ready for analysis, trend reporting, or InfluxDB import.*
 
 ---
 
@@ -151,8 +162,8 @@ Interval: 10s   (Ctrl+C to stop)
   [14:04:12]  cloudflare.com          dns=  1.48ms  tcp=  9.65ms  tls= 22.79ms  http=301 [REDIRECT]
   [14:04:22]  github.com              dns=  6.47ms  tcp= 50.73ms  tls= 84.79ms  http=200 [OK]
 
-⚠️  LATENCY SPIKE: google.com  avg=182.3ms  baseline=28.1ms
-⚠️  github.com: IP change: 140.82.114.4 → 140.82.113.3 (crossed /24 boundary)
+⚠️ LATENCY SPIKE: google.com  avg=182.3ms  baseline=28.1ms
+⚠️ github.com: IP change: 140.82.114.4 → 140.82.113.3 (crossed /24 boundary)
 🚨 PACKET LOSS: cloudflare.com  25%
 ```
 
