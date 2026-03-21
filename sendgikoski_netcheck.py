@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SendgikoskiLabs NetCheck v3.2
+SendgikoskiLabs NetCheck v3.3
 ==============================
 A self-contained network diagnostic and monitoring tool.
 
@@ -27,8 +27,13 @@ Changelog:
          Added subnet-aware IP change detection to suppress anycast noise
   v3.2 - Fixed negative elapsed time in 'all' command
          Added NAT/firewall/WSL2 path-obscuration warning in traceroute results
+  v3.3 - Redesigned GUI: tabbed toolbar layout, Export buttons, Enter-key shortcuts,
+         live host status indicators, dynamic status bar, About tab
 
 Requires: Python 3.8+, stdlib only EXCEPT 'requests' (pip install requests)
+        : On Ubuntu, install 'python3-tk' (sudo apt install python3-tk)
+        : On RedHat/AlmaLinux, install 
+
 Run:
   python sendgikoski_netcheck.py                      # GUI
   python sendgikoski_netcheck.py ping google.com      # CLI ping
@@ -64,7 +69,7 @@ except ImportError:
     HAS_REQUESTS = False
 
 # ─── Constants ──────────────────────────────────────────────────────────────
-VERSION = "3.2"
+VERSION = "3.3"
 TOOL_NAME = "SendgikoskiLabs NetCheck"
 
 DEFAULT_HOSTS = [
@@ -731,7 +736,7 @@ def run_cli(args):
 def launch_gui():
     try:
         import tkinter as tk
-        from tkinter import ttk, scrolledtext, messagebox
+        from tkinter import ttk, scrolledtext, messagebox, filedialog
     except ImportError:
         print("tkinter not available. Run a CLI command instead (--help for options).")
         sys.exit(1)
@@ -739,70 +744,170 @@ def launch_gui():
     if not HAS_REQUESTS:
         print("⚠  'requests' library not installed. ASN/geo/HTTP features will be limited in GUI.")
 
+    # ── Window setup ─────────────────────────────────────────────────────────
     root = tk.Tk()
     root.title(f"{TOOL_NAME} v{VERSION}")
-    root.geometry("900x660")
+    root.geometry("960x700")
+    root.minsize(800, 560)
     root.resizable(True, True)
 
-    # ── Colour scheme ────────────────────────────────────────────────────────
-    BG       = "#1e1e2e"
-    FG       = "#cdd6f4"
-    ACCENT   = "#89b4fa"
-    GREEN    = "#a6e3a1"
-    RED      = "#f38ba8"
-    YELLOW   = "#f9e2af"
-    ENTRY_BG = "#313244"
-    BTN_BG   = "#45475a"
+    # ── Colour palette (Catppuccin Mocha) ────────────────────────────────────
+    BG       = "#1e1e2e"   # base
+    BG2      = "#181825"   # mantle (slightly darker, for panels)
+    FG       = "#cdd6f4"   # text
+    SUBTLE   = "#6c7086"   # overlay0  (dimmed text)
+    ACCENT   = "#89b4fa"   # blue
+    GREEN    = "#a6e3a1"   # green
+    RED      = "#f38ba8"   # red
+    YELLOW   = "#f9e2af"   # yellow
+    MAUVE    = "#cba6f7"   # mauve  (used for branding / headings)
+    ENTRY_BG = "#313244"   # surface0
+    BTN_BG   = "#45475a"   # surface1
+    SEP      = "#585b70"   # surface2 (separator lines)
 
     root.configure(bg=BG)
 
+    # ── ttk styles ───────────────────────────────────────────────────────────
     style = ttk.Style()
     style.theme_use("clam")
-    style.configure("TNotebook",        background=BG, borderwidth=0)
-    style.configure("TNotebook.Tab",    background=BTN_BG, foreground=FG,
-                    padding=[12, 4], font=("Courier", 10, "bold"))
-    style.map("TNotebook.Tab",          background=[("selected", ACCENT)],
-                                        foreground=[("selected", BG)])
-    style.configure("TFrame",           background=BG)
-    style.configure("TLabel",           background=BG, foreground=FG,
-                    font=("Courier", 10))
-    style.configure("TButton",          background=BTN_BG, foreground=FG,
-                    font=("Courier", 10, "bold"), padding=6)
-    style.map("TButton",                background=[("active", ACCENT)])
-    style.configure("TEntry",           fieldbackground=ENTRY_BG, foreground=FG,
-                    insertcolor=FG)
-    style.configure("TCombobox",        fieldbackground=ENTRY_BG, foreground=FG,
+
+    style.configure("TNotebook",
+                    background=BG, borderwidth=0, tabmargins=[0, 0, 0, 0])
+    style.configure("TNotebook.Tab",
+                    background=BTN_BG, foreground=FG,
+                    padding=[14, 5], font=("Courier", 10, "bold"))
+    style.map("TNotebook.Tab",
+              background=[("selected", ACCENT)],
+              foreground=[("selected", BG)])
+
+    style.configure("TFrame",  background=BG)
+    style.configure("TLabel",  background=BG, foreground=FG, font=("Courier", 10))
+    style.configure("Subtle.TLabel", background=BG, foreground=SUBTLE,
+                    font=("Courier", 9))
+    style.configure("Heading.TLabel", background=BG, foreground=MAUVE,
+                    font=("Courier", 11, "bold"))
+
+    style.configure("TButton",
+                    background=BTN_BG, foreground=FG,
+                    font=("Courier", 10, "bold"), padding=[8, 5], relief="flat")
+    style.map("TButton",
+              background=[("active", ACCENT), ("disabled", BG2)],
+              foreground=[("active", BG),     ("disabled", SUBTLE)])
+
+    style.configure("Accent.TButton",
+                    background=ACCENT, foreground=BG,
+                    font=("Courier", 10, "bold"), padding=[8, 5], relief="flat")
+    style.map("Accent.TButton",
+              background=[("active", MAUVE)])
+
+    style.configure("TEntry",
+                    fieldbackground=ENTRY_BG, foreground=FG,
+                    insertcolor=FG, relief="flat", padding=4)
+    style.configure("TCombobox",
+                    fieldbackground=ENTRY_BG, foreground=FG,
                     background=ENTRY_BG)
+    style.configure("TSeparator", background=SEP)
+
+    # ── Shared helpers ───────────────────────────────────────────────────────
 
     def make_output(parent) -> scrolledtext.ScrolledText:
         out = scrolledtext.ScrolledText(
-            parent, bg=BG, fg=FG, font=("Courier", 10),
+            parent, bg=BG2, fg=FG, font=("Courier", 10),
             insertbackground=FG, relief="flat", bd=0,
-            wrap=tk.WORD
+            wrap=tk.WORD, padx=8, pady=6,
+            selectbackground=ACCENT, selectforeground=BG,
         )
-        out.tag_config("ok",     foreground=GREEN)
-        out.tag_config("warn",   foreground=YELLOW)
-        out.tag_config("err",    foreground=RED)
-        out.tag_config("accent", foreground=ACCENT)
-        out.tag_config("head",   foreground=ACCENT, font=("Courier", 10, "bold"))
+        out.tag_config("ok",      foreground=GREEN)
+        out.tag_config("warn",    foreground=YELLOW)
+        out.tag_config("err",     foreground=RED)
+        out.tag_config("accent",  foreground=ACCENT)
+        out.tag_config("mauve",   foreground=MAUVE)
+        out.tag_config("subtle",  foreground=SUBTLE)
+        out.tag_config("head",    foreground=MAUVE,  font=("Courier", 11, "bold"))
+        out.tag_config("subhead", foreground=ACCENT, font=("Courier", 10, "bold"))
         return out
 
-    def write(out: scrolledtext.ScrolledText, text: str, tag: str = ""):
+    def w(out: scrolledtext.ScrolledText, text: str, tag: str = ""):
+        """Append text to an output widget."""
         out.configure(state="normal")
         out.insert(tk.END, text, tag)
         out.see(tk.END)
         out.configure(state="disabled")
 
-    def clear(out: scrolledtext.ScrolledText):
+    def clear_out(out: scrolledtext.ScrolledText):
         out.configure(state="normal")
         out.delete("1.0", tk.END)
         out.configure(state="disabled")
 
-    notebook = ttk.Notebook(root)
-    notebook.pack(fill="both", expand=True, padx=8, pady=8)
+    def export_output(out: scrolledtext.ScrolledText, default_name: str):
+        """Save the contents of an output widget to a text file."""
+        path = filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            initialfile=default_name,
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+        )
+        if path:
+            content = out.get("1.0", tk.END)
+            Path(path).write_text(content)
+            set_status(f"Exported → {path}")
 
-    # ── Tab helper ───────────────────────────────────────────────────────────
-    def make_tab(label: str):
+    # ── Status bar (persistent, bottom of window) ────────────────────────────
+    status_bar = tk.Frame(root, bg=BTN_BG, height=26)
+    status_bar.pack(fill="x", side="bottom")
+    status_bar.pack_propagate(False)
+
+    status_left = tk.Label(
+        status_bar,
+        text=f"  {TOOL_NAME} v{VERSION}   |   Python {platform.python_version()}   |   {OS}",
+        bg=BTN_BG, fg=FG, font=("Courier", 9), anchor="w",
+    )
+    status_left.pack(side="left", fill="x", expand=True, padx=6)
+
+    req_indicator = "● requests" if HAS_REQUESTS else "○ requests (pip install requests)"
+    req_color = GREEN if HAS_REQUESTS else YELLOW
+    status_right = tk.Label(
+        status_bar,
+        text=f"{req_indicator}  ",
+        bg=BTN_BG, fg=req_color, font=("Courier", 9), anchor="e",
+    )
+    status_right.pack(side="right", padx=6)
+
+    def set_status(msg: str):
+        ts = datetime.now().strftime("%H:%M:%S")
+        status_left.config(
+            text=f"  [{ts}]  {msg}"
+        )
+
+    # ── Toolbar helper ───────────────────────────────────────────────────────
+    def make_toolbar(parent) -> tk.Frame:
+        bar = tk.Frame(parent, bg=BG2, pady=6)
+        bar.pack(fill="x", side="top")
+        return bar
+
+    def make_content(parent) -> tk.Frame:
+        frame = ttk.Frame(parent)
+        frame.pack(fill="both", expand=True, padx=8, pady=(4, 8))
+        return frame
+
+    def toolbar_label(bar, text):
+        tk.Label(bar, text=text, bg=BG2, fg=FG,
+                 font=("Courier", 10)).pack(side="left", padx=(10, 2))
+
+    def toolbar_entry(bar, width, default=""):
+        e = ttk.Entry(bar, width=width)
+        e.insert(0, default)
+        e.pack(side="left", padx=(0, 8))
+        return e
+
+    def toolbar_sep(bar):
+        tk.Frame(bar, bg=SEP, width=1).pack(side="left", fill="y",
+                                             padx=6, pady=4)
+
+    # ── Notebook ─────────────────────────────────────────────────────────────
+    notebook = ttk.Notebook(root)
+    notebook.pack(fill="both", expand=True, padx=6, pady=(6, 0))
+
+    def make_tab(label: str) -> ttk.Frame:
         frame = ttk.Frame(notebook)
         notebook.add(frame, text=f"  {label}  ")
         return frame
@@ -810,141 +915,217 @@ def launch_gui():
     # ════════════════════════════════════════════════════════════════════════
     # TAB 1 — Ping
     # ════════════════════════════════════════════════════════════════════════
-    tab_ping = make_tab("Ping")
+    tab_ping = make_tab("🔵  Ping")
+    tb1 = make_toolbar(tab_ping)
 
-    row0 = ttk.Frame(tab_ping); row0.pack(fill="x", padx=10, pady=8)
-    ttk.Label(row0, text="Host:").pack(side="left")
-    ping_host = ttk.Entry(row0, width=28); ping_host.insert(0, "google.com")
-    ping_host.pack(side="left", padx=6)
-    ttk.Label(row0, text="Count:").pack(side="left")
-    ping_count = ttk.Entry(row0, width=5); ping_count.insert(0, "4")
-    ping_count.pack(side="left", padx=4)
+    toolbar_label(tb1, "Host:")
+    ping_host = toolbar_entry(tb1, 26, "google.com")
+    toolbar_label(tb1, "Count:")
+    ping_count = toolbar_entry(tb1, 4, "4")
+    toolbar_sep(tb1)
 
-    ping_out = make_output(tab_ping)
-    ping_out.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+    ping_out = make_output(make_content(tab_ping))
+    ping_out.pack(fill="both", expand=True)
 
-    def do_ping():
-        host = ping_host.get().strip()
-        count = int(ping_count.get().strip() or "4")
+    def do_ping(*_):
+        host  = ping_host.get().strip()
+        try:
+            count = int(ping_count.get().strip() or "4")
+        except ValueError:
+            count = 4
         if not host:
             return
-        clear(ping_out)
-        write(ping_out, f"Pinging {host} ({count} packets)…\n", "accent")
-        root.update()
+        clear_out(ping_out)
+        w(ping_out, f"Pinging {host}  ({count} packets)…\n\n", "accent")
+        set_status(f"Pinging {host}…")
 
         def _run():
-            r = NetDiag.ping(host, count)
+            r   = NetDiag.ping(host, count)
             txt = format_ping(r)
             tag = "ok" if r.success else "err"
-            root.after(0, lambda: write(ping_out, txt + "\n", tag))
+            root.after(0, lambda: w(ping_out, txt + "\n", tag))
+            root.after(0, lambda: set_status(
+                f"Ping {host} — {'OK' if r.success else 'FAILED'}  "
+                f"avg={r.avg_time:.1f}ms  loss={r.packet_loss:.0f}%"
+            ))
 
-        import threading; threading.Thread(target=_run, daemon=True).start()
+        import threading
+        threading.Thread(target=_run, daemon=True).start()
 
-    btn_row = ttk.Frame(tab_ping); btn_row.pack(pady=(0, 8))
-    ttk.Button(btn_row, text="▶  Run Ping", command=do_ping).pack(side="left", padx=4)
-    ttk.Button(btn_row, text="Clear", command=lambda: clear(ping_out)).pack(side="left")
+    ping_run_btn = ttk.Button(tb1, text="▶  Run", style="Accent.TButton",
+                              command=do_ping)
+    ping_run_btn.pack(side="left", padx=2)
+    ttk.Button(tb1, text="Clear",
+               command=lambda: clear_out(ping_out)).pack(side="left", padx=2)
+    ttk.Button(tb1, text="Export",
+               command=lambda: export_output(
+                   ping_out, f"ping_{ping_host.get().strip()}.txt"
+               )).pack(side="left", padx=2)
+
+    ping_host.bind("<Return>", do_ping)
+    ping_count.bind("<Return>", do_ping)
 
     # ════════════════════════════════════════════════════════════════════════
     # TAB 2 — Full Check
     # ════════════════════════════════════════════════════════════════════════
-    tab_check = make_tab("Full Check")
+    tab_check = make_tab("🔍  Full Check")
+    tb2 = make_toolbar(tab_check)
 
-    row0 = ttk.Frame(tab_check); row0.pack(fill="x", padx=10, pady=8)
-    ttk.Label(row0, text="Host:").pack(side="left")
-    check_host = ttk.Entry(row0, width=32); check_host.insert(0, "google.com")
-    check_host.pack(side="left", padx=6)
+    toolbar_label(tb2, "Host:")
+    check_host = toolbar_entry(tb2, 30, "google.com")
+    toolbar_sep(tb2)
 
-    check_out = make_output(tab_check)
-    check_out.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+    check_out = make_output(make_content(tab_check))
+    check_out.pack(fill="both", expand=True)
 
-    def do_check():
+    def do_check(*_):
         host = check_host.get().strip()
         if not host:
             return
-        clear(check_out)
-        write(check_out, f"Running full diagnostic for {host}…\n", "accent")
-        root.update()
+        clear_out(check_out)
+        w(check_out, f"Running full diagnostic for {host}…\n\n", "accent")
+        set_status(f"Checking {host}…")
 
         def _run():
-            r = NetDiag.full_check(host)
+            r   = NetDiag.full_check(host)
             log_check(r)
             txt = format_check(r)
             tag = "ok" if r.success else "err"
-            root.after(0, lambda: write(check_out, txt + "\n", tag))
+            root.after(0, lambda: w(check_out, txt + "\n", tag))
+            root.after(0, lambda: set_status(
+                f"Check {host} — {'OK' if r.success else 'FAILED'}  "
+                f"tcp={r.tcp_ms:.1f}ms  tls={r.tls_ms:.1f}ms  "
+                f"http={r.http_status}"
+                if r.tcp_ms and r.tls_ms and r.http_status
+                else f"Check {host} — FAILED"
+            ))
 
-        import threading; threading.Thread(target=_run, daemon=True).start()
+        import threading
+        threading.Thread(target=_run, daemon=True).start()
 
-    btn_row = ttk.Frame(tab_check); btn_row.pack(pady=(0, 8))
-    ttk.Button(btn_row, text="▶  Run Check", command=do_check).pack(side="left", padx=4)
-    ttk.Button(btn_row, text="Clear", command=lambda: clear(check_out)).pack(side="left")
+    ttk.Button(tb2, text="▶  Run", style="Accent.TButton",
+               command=do_check).pack(side="left", padx=2)
+    ttk.Button(tb2, text="Clear",
+               command=lambda: clear_out(check_out)).pack(side="left", padx=2)
+    ttk.Button(tb2, text="Export",
+               command=lambda: export_output(
+                   check_out, f"check_{check_host.get().strip()}.txt"
+               )).pack(side="left", padx=2)
+
+    check_host.bind("<Return>", do_check)
 
     # ════════════════════════════════════════════════════════════════════════
     # TAB 3 — Traceroute
     # ════════════════════════════════════════════════════════════════════════
-    tab_trace = make_tab("Traceroute")
+    tab_trace = make_tab("🗺  Traceroute")
+    tb3 = make_toolbar(tab_trace)
 
-    row0 = ttk.Frame(tab_trace); row0.pack(fill="x", padx=10, pady=8)
-    ttk.Label(row0, text="Host:").pack(side="left")
-    trace_host = ttk.Entry(row0, width=28); trace_host.insert(0, "google.com")
-    trace_host.pack(side="left", padx=6)
-    ttk.Label(row0, text="Max hops:").pack(side="left")
-    trace_hops = ttk.Entry(row0, width=5); trace_hops.insert(0, "15")
-    trace_hops.pack(side="left", padx=4)
+    toolbar_label(tb3, "Host:")
+    trace_host = toolbar_entry(tb3, 26, "google.com")
+    toolbar_label(tb3, "Max hops:")
+    trace_hops = toolbar_entry(tb3, 4, "15")
+    toolbar_sep(tb3)
 
-    trace_out = make_output(tab_trace)
-    trace_out.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+    trace_out = make_output(make_content(tab_trace))
+    trace_out.pack(fill="both", expand=True)
 
-    def do_trace():
+    def do_trace(*_):
         host = trace_host.get().strip()
-        hops = int(trace_hops.get().strip() or "15")
+        try:
+            hops = int(trace_hops.get().strip() or "15")
+        except ValueError:
+            hops = 15
         if not host:
             return
-        clear(trace_out)
-        write(trace_out, f"Tracing route to {host} (max {hops} hops)…\n", "accent")
-        root.update()
+        clear_out(trace_out)
+        w(trace_out, f"Tracing route to {host}  (max {hops} hops)…\n\n", "accent")
+        set_status(f"Traceroute to {host}…")
 
         def _run():
-            r = NetDiag.traceroute(host, hops)
+            r   = NetDiag.traceroute(host, hops)
             txt = format_traceroute(r)
-            tag = "ok" if r.success else "warn"
-            root.after(0, lambda: write(trace_out, txt + "\n", tag))
+            tag = "warn" if r.nat_warning else ("ok" if r.success else "err")
+            root.after(0, lambda: w(trace_out, txt + "\n", tag))
+            root.after(0, lambda: set_status(
+                f"Traceroute {host} — {len(r.hops)} hops visible, "
+                f"{r.filtered_hops} filtered"
+                + ("  ⚠ PATH OBSCURED" if r.nat_warning else "")
+            ))
 
-        import threading; threading.Thread(target=_run, daemon=True).start()
+        import threading
+        threading.Thread(target=_run, daemon=True).start()
 
-    btn_row = ttk.Frame(tab_trace); btn_row.pack(pady=(0, 8))
-    ttk.Button(btn_row, text="▶  Run Traceroute", command=do_trace).pack(side="left", padx=4)
-    ttk.Button(btn_row, text="Clear", command=lambda: clear(trace_out)).pack(side="left")
+    ttk.Button(tb3, text="▶  Run", style="Accent.TButton",
+               command=do_trace).pack(side="left", padx=2)
+    ttk.Button(tb3, text="Clear",
+               command=lambda: clear_out(trace_out)).pack(side="left", padx=2)
+    ttk.Button(tb3, text="Export",
+               command=lambda: export_output(
+                   trace_out, f"traceroute_{trace_host.get().strip()}.txt"
+               )).pack(side="left", padx=2)
+
+    trace_host.bind("<Return>", do_trace)
+    trace_hops.bind("<Return>", do_trace)
 
     # ════════════════════════════════════════════════════════════════════════
     # TAB 4 — Monitor
     # ════════════════════════════════════════════════════════════════════════
-    tab_mon = make_tab("Monitor")
+    tab_mon = make_tab("📡  Monitor")
+    tb4 = make_toolbar(tab_mon)
 
-    row0 = ttk.Frame(tab_mon); row0.pack(fill="x", padx=10, pady=8)
-    ttk.Label(row0, text="Hosts (comma-sep):").pack(side="left")
+    toolbar_label(tb4, "Hosts:")
     mon_hosts_var = tk.StringVar(value=", ".join(DEFAULT_HOSTS))
-    mon_hosts = ttk.Entry(row0, textvariable=mon_hosts_var, width=42)
-    mon_hosts.pack(side="left", padx=6)
-    ttk.Label(row0, text="Interval (s):").pack(side="left")
-    mon_interval = ttk.Entry(row0, width=5); mon_interval.insert(0, str(MONITOR_INTERVAL))
-    mon_interval.pack(side="left", padx=4)
+    mon_hosts_entry = ttk.Entry(tb4, textvariable=mon_hosts_var, width=38)
+    mon_hosts_entry.pack(side="left", padx=(0, 8))
+    toolbar_label(tb4, "Interval (s):")
+    mon_interval_entry = toolbar_entry(tb4, 4, str(MONITOR_INTERVAL))
+    toolbar_sep(tb4)
 
-    mon_out = make_output(tab_mon)
-    mon_out.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+    # Host status indicator row  (colored dots, updated live)
+    indicator_frame = tk.Frame(tab_mon, bg=BG, pady=4)
+    indicator_frame.pack(fill="x", padx=8)
+    host_indicators: dict = {}   # host → tk.Label
 
-    mon_running = [False]
-    mon_state = [None]
+    def _rebuild_indicators(hosts):
+        for w_ in indicator_frame.winfo_children():
+            w_.destroy()
+        host_indicators.clear()
+        tk.Label(indicator_frame, text="Status: ", bg=BG,
+                 fg=SUBTLE, font=("Courier", 9)).pack(side="left")
+        for h in hosts:
+            lbl = tk.Label(indicator_frame,
+                           text=f"⬤ {h}",
+                           bg=BG, fg=SUBTLE,
+                           font=("Courier", 9))
+            lbl.pack(side="left", padx=6)
+            host_indicators[h] = lbl
+
+    def _set_indicator(host: str, ok: bool):
+        lbl = host_indicators.get(host)
+        if lbl:
+            lbl.config(fg=GREEN if ok else RED)
+
+    _rebuild_indicators(DEFAULT_HOSTS)
+
+    mon_out = make_output(make_content(tab_mon))
+    mon_out.pack(fill="both", expand=True)
+
+    mon_running  = [False]
+    mon_state_ref = [None]
 
     def mon_write(text: str, tag: str = ""):
-        root.after(0, lambda: write(mon_out, text, tag))
+        root.after(0, lambda: w(mon_out, text, tag))
 
     def do_monitor_tick(hosts, interval, state: MonitorState):
         if not mon_running[0]:
             return
+        ts = datetime.now().strftime("%H:%M:%S")
         for host in hosts:
             result = NetDiag.full_check(host)
             state.record(result)
             log_check(result)
+
+            root.after(0, lambda h=host, ok=result.success: _set_indicator(h, ok))
 
             ip_alert  = state.check_ip_change(host, result.ip)
             asn_alert = state.check_asn_change(host, result.asn)
@@ -954,12 +1135,12 @@ def launch_gui():
                 mon_write(f"\n🚨 {host}: {asn_alert}\n", "err")
 
             stats = state.analyze(host)
-            ts = datetime.now().strftime("%H:%M:%S")
             if not stats:
-                mon_write(f"  [{ts}]  {host:<22} — collecting…\n", "accent")
+                mon_write(f"  [{ts}]  {host:<22} — collecting samples…\n", "subtle")
                 continue
 
             avg = stats["avg"]
+            spike_flag = ""
             if host not in state.baseline:
                 state.baseline[host] = avg
             else:
@@ -968,75 +1149,152 @@ def launch_gui():
                 if avg > baseline * LATENCY_SPIKE_MULTIPLIER:
                     last = state.last_spike.get(host, 0)
                     if now - last > SPIKE_COOLDOWN:
-                        mon_write(f"\n⚠️  LATENCY SPIKE: {host}  avg={avg:.1f}ms  baseline={baseline:.1f}ms\n", "warn")
+                        mon_write(
+                            f"\n⚠️  LATENCY SPIKE: {host}  "
+                            f"avg={avg:.1f}ms  baseline={baseline:.1f}ms\n",
+                            "warn"
+                        )
                         state.last_spike[host] = now
+                        spike_flag = " ⚠️"
                 state.baseline[host] = (baseline * 0.9) + (avg * 0.1)
 
             if stats["loss"] > PACKET_LOSS_THRESHOLD:
                 mon_write(f"\n🚨 PACKET LOSS: {host}  {stats['loss']:.0f}%\n", "err")
 
-            tcp_str = f"{result.tcp_ms:.1f}ms" if result.tcp_ms else "FAIL"
-            dns_str = f"{result.dns_ms:.1f}ms" if result.dns_ms else "N/A"
-            http_str = str(result.http_status) if result.http_status else "N/A"
-            line = (f"  [{ts}]  {host:<22}  dns={dns_str:<9}  "
-                    f"tcp={tcp_str:<9}  http={http_str}\n")
+            dns_s  = f"{result.dns_ms:.1f}ms"  if result.dns_ms  else "N/A  "
+            tcp_s  = f"{result.tcp_ms:.1f}ms"  if result.tcp_ms  else "FAIL "
+            tls_s  = f"{result.tls_ms:.1f}ms"  if result.tls_ms  else "N/A  "
+            http_s = str(result.http_status)    if result.http_status else "N/A"
+
+            line = (
+                f"  [{ts}]  {host:<22}  "
+                f"dns={dns_s:<9}  tcp={tcp_s:<9}  "
+                f"tls={tls_s:<9}  http={http_s}{spike_flag}\n"
+            )
             tag = "ok" if result.success else "err"
             mon_write(line, tag)
 
-        mon_write(f"{'─'*65}\n", "accent")
+        mon_write(f"{'─'*72}\n", "subtle")
+        root.after(0, lambda: set_status(
+            f"Monitor — last sweep {ts}  |  "
+            f"{len(hosts)} host(s) active"
+        ))
 
         if mon_running[0]:
-            root.after(interval * 1000, lambda: do_monitor_tick(hosts, interval, state))
+            root.after(interval * 1000,
+                       lambda: do_monitor_tick(hosts, interval, state))
 
     def start_monitor():
         if mon_running[0]:
             return
         hosts_raw = mon_hosts_var.get()
         hosts = [h.strip() for h in hosts_raw.split(",") if h.strip()]
-        interval = int(mon_interval.get().strip() or str(MONITOR_INTERVAL))
+        try:
+            interval = int(mon_interval_entry.get().strip() or str(MONITOR_INTERVAL))
+        except ValueError:
+            interval = MONITOR_INTERVAL
         state = MonitorState()
-        mon_state[0] = state
+        mon_state_ref[0] = state
         mon_running[0] = True
-        clear(mon_out)
-        write(mon_out, f"{TOOL_NAME} v{VERSION} — Monitor\n", "head")
-        write(mon_out, f"Hosts: {', '.join(hosts)}   Interval: {interval}s\n\n", "accent")
+        clear_out(mon_out)
+        _rebuild_indicators(hosts)
+        w(mon_out, f"{TOOL_NAME} v{VERSION} — Monitor Mode\n", "head")
+        w(mon_out, f"Hosts    : {', '.join(hosts)}\n", "accent")
+        w(mon_out, f"Interval : {interval}s\n", "accent")
+        w(mon_out, f"Started  : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n",
+          "accent")
+        set_status(f"Monitor started — {len(hosts)} host(s)  interval={interval}s")
 
         import threading
         threading.Thread(
             target=lambda: do_monitor_tick(hosts, interval, state),
             daemon=True
         ).start()
-        btn_start.config(state="disabled")
-        btn_stop.config(state="normal")
+        btn_mon_start.config(state="disabled")
+        btn_mon_stop.config(state="normal")
 
     def stop_monitor():
         mon_running[0] = False
-        mon_write("\n[Monitor stopped]\n", "warn")
-        btn_start.config(state="normal")
-        btn_stop.config(state="disabled")
+        mon_write("\n■  Monitor stopped.\n", "warn")
+        for lbl in host_indicators.values():
+            lbl.config(fg=SUBTLE)
+        set_status("Monitor stopped.")
+        btn_mon_start.config(state="normal")
+        btn_mon_stop.config(state="disabled")
 
-    btn_row = ttk.Frame(tab_mon); btn_row.pack(pady=(0, 8))
-    btn_start = ttk.Button(btn_row, text="▶  Start Monitor", command=start_monitor)
-    btn_start.pack(side="left", padx=4)
-    btn_stop  = ttk.Button(btn_row, text="■  Stop",          command=stop_monitor,
-                           state="disabled")
-    btn_stop.pack(side="left", padx=4)
-    ttk.Button(btn_row, text="Clear", command=lambda: clear(mon_out)).pack(side="left")
+    btn_mon_start = ttk.Button(tb4, text="▶  Start",
+                               style="Accent.TButton", command=start_monitor)
+    btn_mon_start.pack(side="left", padx=2)
+    btn_mon_stop  = ttk.Button(tb4, text="■  Stop",
+                               command=stop_monitor, state="disabled")
+    btn_mon_stop.pack(side="left", padx=2)
+    ttk.Button(tb4, text="Clear",
+               command=lambda: clear_out(mon_out)).pack(side="left", padx=2)
+    ttk.Button(tb4, text="Export",
+               command=lambda: export_output(
+                   mon_out, f"monitor_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+               )).pack(side="left", padx=2)
 
     # ════════════════════════════════════════════════════════════════════════
-    # Status bar
+    # TAB 5 — About
     # ════════════════════════════════════════════════════════════════════════
-    status_frame = tk.Frame(root, bg=BTN_BG, height=24)
-    status_frame.pack(fill="x", side="bottom")
-    req_status = "requests ✓" if HAS_REQUESTS else "requests ✗ (pip install requests)"
-    tk.Label(
-        status_frame,
-        text=f"  {TOOL_NAME} v{VERSION}   |   Python {platform.python_version()}   |   {OS}   |   {req_status}",
-        bg=BTN_BG, fg=FG, font=("Courier", 9), anchor="w"
-    ).pack(fill="x", padx=6)
+    tab_about = make_tab("ℹ  About")
+    about_frame = ttk.Frame(tab_about)
+    about_frame.pack(fill="both", expand=True, padx=30, pady=20)
+
+    about_text = [
+        (f"{TOOL_NAME}", "head"),
+        (f"Version {VERSION}  |  Python {platform.python_version()}  |  {OS}\n\n", "subtle"),
+        ("FEATURES\n", "subhead"),
+        (
+            "  DNS resolution timing          TCP connect latency\n"
+            "  TLS handshake timing           HTTP/HTTPS status check\n"
+            "  ASN / ISP / Geo lookup         Traceroute with bottleneck detection\n"
+            "  Subnet-aware IP change alerts  ASN & route change detection\n"
+            "  Adaptive latency baseline      Packet loss detection\n"
+            "  CSV logging                    JSON output\n"
+            "  NAT / WSL2 path warnings       Cross-platform (Linux, macOS, Windows)\n\n",
+            "",
+        ),
+        ("CLI USAGE\n", "subhead"),
+        (
+            "  python sendgikoski_netcheck.py                    # this GUI\n"
+            "  python sendgikoski_netcheck.py ping google.com    # ping\n"
+            "  python sendgikoski_netcheck.py check google.com   # full check\n"
+            "  python sendgikoski_netcheck.py traceroute HOST    # traceroute\n"
+            "  python sendgikoski_netcheck.py all                # all hosts\n"
+            "  python sendgikoski_netcheck.py monitor            # live monitor\n"
+            "  python sendgikoski_netcheck.py --help             # full help\n\n",
+            "accent",
+        ),
+        ("DEPENDENCIES\n", "subhead"),
+        (
+            "  stdlib only — no installation required for core features.\n"
+            "  pip install requests   → enables ASN lookup, HTTP checks\n\n",
+            "",
+        ),
+        ("PART OF THE SENDGIKOSKILABS SUITE\n", "subhead"),
+        (
+            "  netcheck   — single-host network diagnostics  (this tool)\n"
+            "  ispinsight — ISP analysis, BGP, peering\n"
+            "  logsleuth  — log analysis and anomaly detection\n"
+            "  netwatch   — unified monitoring with Grafana integration\n\n",
+            "",
+        ),
+        ("AUTHOR\n", "subhead"),
+        (
+            "  Alan Sendgikoski  —  SendgikoskiLabs\n"
+            "  https://github.com/SendgikoskiLabs\n",
+            "subtle",
+        ),
+    ]
+
+    about_out = make_output(about_frame)
+    about_out.pack(fill="both", expand=True)
+    for text, tag in about_text:
+        w(about_out, text + ("\n" if not text.endswith("\n") else ""), tag)
 
     root.mainloop()
-
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
