@@ -62,7 +62,7 @@ Built by [Alan Sendgikoski](https://www.linkedin.com/in/alansendgikoski/) as par
 | **Monitor** | Continuous multi-host monitoring with adaptive latency baseline |
 | **Alerting** | Latency spike detection, packet loss, IP/ASN/route change alerts |
 | **Intelligence** | Subnet-aware IP change detection (suppresses anycast rotation noise) |
-| **Diagnostics** | NAT / WSL2 / double-NAT path obscuration warning in traceroute |
+| **Environment** | NAT / WSL2 / double-NAT path obscuration warning in traceroute |
 | **Output** | Formatted CLI output, JSON export, CSV logging |
 | **Interface** | Dark-themed tkinter GUI with live status indicators |
 | **Platform** | Linux, macOS, Windows — single file, no install |
