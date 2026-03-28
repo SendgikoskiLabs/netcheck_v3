@@ -2,7 +2,7 @@
 
 **A professional, self-contained network diagnostic and monitoring tool.**
 
-[![Version](https://img.shields.io/badge/version-3.4-89b4fa?style=flat-square)](https://github.com/SendgikoskiLabs/netcheck_v3)
+[![Version](https://img.shields.io/badge/version-3.6-89b4fa?style=flat-square)](https://github.com/SendgikoskiLabs/netcheck_v3)
 [![Python](https://img.shields.io/badge/python-3.8%2B-cba6f7?style=flat-square)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-a6e3a1?style=flat-square)]()
 [![License](https://img.shields.io/badge/license-MIT-f9e2af?style=flat-square)]()
@@ -11,7 +11,7 @@
 
 ## Overview
 
-NetCheck is a single-file Python tool that gives network engineers, sysadmins, and power users a complete picture of connectivity to any host — from DNS resolution through TLS handshake — with no installation required beyond Python itself.
+NetCheck is a single-file Python tool that gives network engineers, sysadmins, and power users a complete picture of connectivity to any host — from DNS resolution through TLS handshake — with minimal installation.
 
 Run it with no arguments to launch the dark-themed GUI. Pass a subcommand to use it from the CLI. Pipe `--json` output into your own tooling. Run `--monitor` to watch multiple hosts continuously with intelligent alerting.
 
@@ -71,38 +71,95 @@ Built by [Alan Sendgikoski](https://www.linkedin.com/in/alansendgikoski/) as par
 
 ## Requirements
 
-**Core features** require only Python 3.8+ and its standard library.
+**Python 3.8+** required for core features.
 
-**ASN lookup, ISP/geo enrichment, and HTTP checks** require the `requests` library:
+**Python Requests library** required for ASN lookup, ISP/geo enrichment, and HTTP checks.
 
-```bash
-pip install requests
-```
-
-**GUI** requires `tkinter`, which ships with most Python distributions. On Ubuntu/Debian:
-
-```bash
-sudo apt install python3-tk
-```
+**Python tkinter package** required for creating the graphical user interface (GUIs).
 
 ---
 
 ## Installation
 
-No installation required. Download the single file and run it:
+**Ubuntu/Debian**
+  
+  👉 Install tkinter
+  
+    ```bash
+    sudo apt update
+    sudo apt install python3-tk
+    ```
+  
+  👉 Download the code
+  
+     ```bash
+    git clone https://github.com/SendgikoskiLabs/netcheck_v3.git
+    cd netcheck_v3
+    ```
 
-```bash
-# Clone the repo
-git clone https://github.com/SendgikoskiLabs/netcheck_v3.git
-cd netcheck_v3
+  👉 Create a virtual environment (optional but recommended) and install modules
 
-# Optional but recommended
-pip install requests
+    ```bash
+    python3 -m venv venv
+    source venv/Scripts/activate
+    pip install requests
+    ```
 
-# Launch the GUI
-python sendgikoski_netcheck.py
-```
+**Redhat/macOS**
+    
+  👉 Install tkinter
+  
+    ```bash
+    sudo yum update
+    sudo yum install python3-tkinter
+    ```
+  
+  👉 Download the code
+  
+     ```bash
+    git clone https://github.com/SendgikoskiLabs/netcheck_v3.git
+    cd netcheck_v3
+    ```
 
+  👉 Create a virtual environment (optional but recommended) and install modules
+
+    ```bash
+    python3 -m venv venv
+    source venv/Scripts/activate
+    pip install requests
+    ```
+
+**Windows**
+
+  👉 Install Python-3 and Git. Open PowerShell in Windows Terminal and run the following commands:
+  
+    ```PowerShell
+        winget configure -f https://aka.ms/python-config
+        winget install --id Git.Git -e --source winget
+    ```
+    
+    When the Python installation starts, a terminal window shows the setup steps and required installs. Review them, then confirm by selecting [Y] Yes or [N] No to continue.
+  
+  👉 Download the code. Open Windows Terminal and run the following commands:
+  
+     ```PowerShell
+    git clone https://github.com/SendgikoskiLabs/netcheck_v3.git
+    cd netcheck_v3
+    ```
+    
+  👉 Create a virtual environment using Command Prompt (optional but recommended) and install modules
+
+    ```Windows Command Prompt
+    python -m venv venv
+    .\venv\Scripts\activate
+    pip install requests
+    ```
+
+  👉 Verify tkinter installation. A small window will appear.
+
+    ```Windows Command Prompt
+    python -m tkinter
+    ```
 ---
 
 ## Usage
@@ -154,7 +211,7 @@ python sendgikoski_netcheck.py --help
 Monitor mode polls each host on a configurable interval and provides intelligent alerting:
 
 ```
-SendgikoskiLabs NetCheck v3.3  —  Monitor Mode
+SendgikoskiLabs NetCheck v3.6  —  Monitor Mode
 Hosts: google.com, cloudflare.com, github.com
 Interval: 10s   (Ctrl+C to stop)
 
@@ -264,7 +321,9 @@ DEFAULT_HOSTS = [
 
 | Version | Changes |
 |---|---|
-| **3.4** | Fixed Windows traceroute: split into OS-specific parsers, handle `Request timed out.` hops, correct IP position (after latencies on Windows), fix header skip, per-hop timeout scaling |
+| **3.6** | v3.6: Reduce tracert -w to 1000ms to fix timeout on heavily filtered routes |
+| **3.5** | v3.5: Fix Windows traceroute — cp850 encoding, -w 2000 flag, success on filtered hops |
+| **3.4** | v3.4: Fix Windows traceroute parser — handle tracert output format differences |
 | **3.3** | Redesigned GUI: tabbed toolbar layout, Export buttons, Enter-key shortcuts, live host status indicators, dynamic status bar, About tab |
 | **3.2** | Fixed negative elapsed time in `all` command; added NAT/WSL2 path-obscuration warning in traceroute |
 | **3.1** | Fixed Ctrl+C traceback in monitor mode; added subnet-aware IP change detection |
@@ -293,6 +352,12 @@ Follow the project on GitHub for updates: [github.com/SendgikoskiLabs](https://g
 
 MIT License — free to use, modify, and distribute.
 See [LICENSE](LICENSE) for full terms.
+
+---
+
+## Resources
+
+[Microsoft] (https://learn.microsoft.com/en-us/windows/dev-environment/python?tabs=winget) · Set up your Python development environment on Windows
 
 ---
 
