@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SendgikoskiLabs NetCheck v3.3
+SendgikoskiLabs NetCheck v3.4
 ==============================
 A self-contained network diagnostic and monitoring tool.
 
@@ -25,15 +25,15 @@ Features:
 Changelog:
   v3.1 - Fixed Ctrl+C traceback in monitor mode (signal handler)
          Added subnet-aware IP change detection to suppress anycast noise
-  v3.2 - Fixed negative elapsed time in 'all' command
-         Added NAT/firewall/WSL2 path-obscuration warning in traceroute results
+  v3.4 - Fixed Windows traceroute: split parser into OS-specific methods,
+         handle 'Request timed out.' hops, correct IP position parsing,
+         fix header line skip, increase per-hop timeout
   v3.3 - Redesigned GUI: tabbed toolbar layout, Export buttons, Enter-key shortcuts,
          live host status indicators, dynamic status bar, About tab
+  v3.2 - Fixed negative elapsed time in 'all' command
+         Added NAT/firewall/WSL2 path-obscuration warning in traceroute results
 
 Requires: Python 3.8+, stdlib only EXCEPT 'requests' (pip install requests)
-        : On Ubuntu, install 'python3-tk' (sudo apt install python3-tk)
-        : On RedHat/AlmaLinux, install 
-
 Run:
   python sendgikoski_netcheck.py                      # GUI
   python sendgikoski_netcheck.py ping google.com      # CLI ping
@@ -69,7 +69,7 @@ except ImportError:
     HAS_REQUESTS = False
 
 # ─── Constants ──────────────────────────────────────────────────────────────
-VERSION = "3.3"
+VERSION = "3.4"
 TOOL_NAME = "SendgikoskiLabs NetCheck"
 
 DEFAULT_HOSTS = [
@@ -89,6 +89,8 @@ MONITOR_INTERVAL = 10            # seconds
 
 OS = platform.system()
 IS_WINDOWS = OS == "Windows"
+print(f"\nPlatform type: {OS}")
+print(f"\nIS_WINDOWS contents: {IS_WINDOWS}")
 
 
 # ─── Data classes ───────────────────────────────────────────────────────────
@@ -277,45 +279,42 @@ class NetDiag:
     @staticmethod
     def traceroute(host: str, max_hops: int = 15) -> TracerouteResult:
         try:
+            # Windows uses tracert; Linux/macOS uses traceroute
+            # Timeout: allow 6s per hop plus 10s buffer to avoid premature kills
             if IS_WINDOWS:
                 cmd = ["tracert", "-h", str(max_hops), host]
+                timeout = max_hops * 6 + 10
+                print(f"\nContents of cmd: {cmd}")
             else:
                 cmd = ["traceroute", "-n", "-m", str(max_hops), host]
+                timeout = max_hops * 5 + 10
+                print(f"\nContents of cmd: {cmd}")
 
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=60
+                cmd, capture_output=True, text=True, timeout=timeout
             )
+            print(f"\nContents of result: {result}")
             output = result.stdout
-            hops = []
-            filtered_hops = 0
-            slowest_hop = None
-            slowest_ms = 0.0
+            print(f"\nContents of output: {output}")
+            stderr = result.stderr
+            print(f"\nContents of stderr: {stderr}")
 
-            for line in output.splitlines()[1:]:
-                if "* * *" in line:
-                    filtered_hops += 1
-                    continue
-                parts = line.split()
-                if not parts:
-                    continue
-                latencies = [float(x) for x in re.findall(r"(\d+(?:\.\d+)?)\s*ms", line)]
-                hop_ip = None
-                for p in parts:
-                    if re.match(r"\d+\.\d+\.\d+\.\d+", p):
-                        hop_ip = p
-                        break
-                hop = {
-                    "hop": parts[0] if parts[0].isdigit() else "?",
-                    "ip": hop_ip or "*",
-                    "latencies": latencies,
-                    "avg_ms": round(statistics.mean(latencies), 2) if latencies else None,
-                }
-                hops.append(hop)
-                if latencies:
-                    peak = max(latencies)
-                    if peak > slowest_ms:
-                        slowest_ms = peak
-                        slowest_hop = line.strip()
+            # If stdout is empty, the command likely failed — surface the error
+            if not output.strip():
+                err_msg = stderr.strip() if stderr.strip() else \
+                    f"Command produced no output (exit code {result.returncode})"
+                return TracerouteResult(
+                    host=host, hops=[], filtered_hops=0,
+                    slowest_hop=err_msg, slowest_ms=0.0,
+                    success=False, nat_warning=False
+                )
+
+            if IS_WINDOWS:
+                hops, filtered_hops, slowest_hop, slowest_ms = \
+                    NetDiag._parse_tracert_windows(output)
+            else:
+                hops, filtered_hops, slowest_hop, slowest_ms = \
+                    NetDiag._parse_traceroute_linux(output)
 
             # ── NAT / firewall / WSL2 path obscuration detection ────────
             # Heuristic: only 1-2 visible hops AND significant filtered hops
@@ -332,8 +331,179 @@ class NetDiag:
                 success=bool(hops),
                 nat_warning=nat_warning,
             )
+        except subprocess.TimeoutExpired:
+            return TracerouteResult(
+                host=host, hops=[], filtered_hops=0,
+                slowest_hop="Command timed out", slowest_ms=0.0,
+                success=False, nat_warning=False
+            )
+        except FileNotFoundError:
+            cmd_name = "tracert" if IS_WINDOWS else "traceroute"
+            return TracerouteResult(
+                host=host, hops=[], filtered_hops=0,
+                slowest_hop=f"'{cmd_name}' not found — is it installed and on PATH?",
+                slowest_ms=0.0, success=False, nat_warning=False
+            )
         except Exception as e:
-            return TracerouteResult(host, [], 0, None, 0.0, False)
+            return TracerouteResult(
+                host=host, hops=[], filtered_hops=0,
+                slowest_hop=f"Error: {type(e).__name__}: {e}",
+                slowest_ms=0.0, success=False, nat_warning=False
+            )
+
+    @staticmethod
+    def _parse_tracert_windows(output: str):
+        """
+        Parse Windows tracert output.
+
+        Windows tracert format:
+          Tracing route to google.com [64.233.177.138]
+          over a maximum of 5 hops:
+
+            1     4 ms     4 ms     3 ms  172.19.54.193
+            2     *        *        *     Request timed out.
+            3    12 ms    11 ms    10 ms  192.168.1.1
+
+          Trace complete.
+
+        Key differences from Linux traceroute:
+          - Header spans 2 lines before hop data begins
+          - Latencies formatted as "4 ms" (space before ms)
+          - Timed-out hops say "Request timed out." not "* * *"
+          - IP address appears AFTER latencies (not before)
+          - Lines are indented with spaces
+        """
+        hops = []
+        filtered_hops = 0
+        slowest_hop = None
+        slowest_ms = 0.0
+
+        for line in output.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+
+            # Skip header lines — only process lines that start with a hop number
+            parts = stripped.split()
+            if not parts or not parts[0].isdigit():
+                continue
+
+            hop_num = parts[0]
+
+            # Timed-out hop — "Request timed out." appears instead of latencies
+            if "timed out" in stripped.lower() or "request timed out" in stripped.lower():
+                filtered_hops += 1
+                continue
+
+            # All-star hop — some hops show "* * *" on Windows too
+            if stripped.count("*") >= 3 and not re.search(r"\d+\s+ms", stripped):
+                filtered_hops += 1
+                continue
+
+            # Extract latencies — Windows format: "4 ms" or "4ms"
+            latencies = [
+                float(x)
+                for x in re.findall(r"(\d+(?:\.\d+)?)\s+ms", stripped)
+            ]
+
+            # Extract IP — on Windows it appears after the latencies
+            hop_ip = None
+            ip_matches = re.findall(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", stripped)
+            if ip_matches:
+                hop_ip = ip_matches[-1]  # last IP on the line is the hop address
+
+            # Skip lines with no useful data
+            if not latencies and not hop_ip:
+                continue
+
+            avg = round(statistics.mean(latencies), 2) if latencies else None
+            hop = {
+                "hop": hop_num,
+                "ip": hop_ip or "*",
+                "latencies": latencies,
+                "avg_ms": avg,
+            }
+            hops.append(hop)
+
+            if latencies:
+                peak = max(latencies)
+                if peak > slowest_ms:
+                    slowest_ms = peak
+                    slowest_hop = stripped
+
+        return hops, filtered_hops, slowest_hop, slowest_ms
+
+    @staticmethod
+    def _parse_traceroute_linux(output: str):
+        """
+        Parse Linux/macOS traceroute output.
+
+        Linux traceroute -n format:
+          traceroute to google.com (...), 15 hops max, 60 byte packets
+           1  172.28.128.1  0.470 ms  0.437 ms  0.421 ms
+           2  172.19.54.193  7.042 ms  7.023 ms  6.993 ms
+           3  * * *
+
+        Key differences from Windows tracert:
+          - Single header line
+          - IP appears before latencies
+          - Filtered hops shown as "* * *"
+          - No "ms" space issue (uses "0.470 ms")
+        """
+        hops = []
+        filtered_hops = 0
+        slowest_hop = None
+        slowest_ms = 0.0
+
+        for line in output.splitlines()[1:]:  # skip first header line
+            stripped = line.strip()
+            if not stripped:
+                continue
+
+            parts = stripped.split()
+            if not parts:
+                continue
+
+            # Filtered hop
+            if "* * *" in stripped:
+                filtered_hops += 1
+                continue
+
+            # Must start with a hop number
+            if not parts[0].isdigit():
+                continue
+
+            hop_num = parts[0]
+
+            # Extract latencies
+            latencies = [
+                float(x)
+                for x in re.findall(r"(\d+(?:\.\d+)?)\s*ms", stripped)
+            ]
+
+            # Extract IP — on Linux it appears right after the hop number
+            hop_ip = None
+            for p in parts[1:]:
+                if re.match(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", p):
+                    hop_ip = p
+                    break
+
+            avg = round(statistics.mean(latencies), 2) if latencies else None
+            hop = {
+                "hop": hop_num,
+                "ip": hop_ip or "*",
+                "latencies": latencies,
+                "avg_ms": avg,
+            }
+            hops.append(hop)
+
+            if latencies:
+                peak = max(latencies)
+                if peak > slowest_ms:
+                    slowest_ms = peak
+                    slowest_hop = stripped
+
+        return hops, filtered_hops, slowest_hop, slowest_ms
 
     # ── Full host check ──────────────────────────────────────────────────────
 
@@ -517,6 +687,13 @@ def format_traceroute(r: TracerouteResult) -> str:
         f"╚══════════════════════════════════════════════════════════╝",
         f"  Host  : {r.host}",
         f"  Hops  : {len(r.hops)}   Filtered: {r.filtered_hops}",
+    ]
+    # Show error detail when the command failed outright
+    if not r.success and r.slowest_hop and not r.hops:
+        lines.append(f"\n  ✗  Error: {r.slowest_hop}")
+        lines.append(f"\n  Timestamp: {r.timestamp}")
+        return "\n".join(lines)
+    lines += [
         "",
         f"  {'HOP':<5} {'IP':<18} {'AVG ms':>8}",
         f"  {'─'*5} {'─'*18} {'─'*8}",

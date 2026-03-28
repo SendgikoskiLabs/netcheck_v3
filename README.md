@@ -2,7 +2,7 @@
 
 **A professional, self-contained network diagnostic and monitoring tool.**
 
-[![Version](https://img.shields.io/badge/version-3.3-89b4fa?style=flat-square)](https://github.com/SendgikoskiLabs/netcheck_v3)
+[![Version](https://img.shields.io/badge/version-3.4-89b4fa?style=flat-square)](https://github.com/SendgikoskiLabs/netcheck_v3)
 [![Python](https://img.shields.io/badge/python-3.8%2B-cba6f7?style=flat-square)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-a6e3a1?style=flat-square)]()
 [![License](https://img.shields.io/badge/license-MIT-f9e2af?style=flat-square)]()
@@ -264,6 +264,7 @@ DEFAULT_HOSTS = [
 
 | Version | Changes |
 |---|---|
+| **3.4** | Fixed Windows traceroute: split into OS-specific parsers, handle `Request timed out.` hops, correct IP position (after latencies on Windows), fix header skip, per-hop timeout scaling |
 | **3.3** | Redesigned GUI: tabbed toolbar layout, Export buttons, Enter-key shortcuts, live host status indicators, dynamic status bar, About tab |
 | **3.2** | Fixed negative elapsed time in `all` command; added NAT/WSL2 path-obscuration warning in traceroute |
 | **3.1** | Fixed Ctrl+C traceback in monitor mode; added subnet-aware IP change detection |
