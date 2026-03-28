@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SendgikoskiLabs NetCheck v3.4
+SendgikoskiLabs NetCheck v3.1
 ==============================
 A self-contained network diagnostic and monitoring tool.
 
@@ -25,6 +25,9 @@ Features:
 Changelog:
   v3.1 - Fixed Ctrl+C traceback in monitor mode (signal handler)
          Added subnet-aware IP change detection to suppress anycast noise
+  v3.5 - Fixed Windows traceroute: added -w 2000 flag to reduce per-hop wait,
+         fixed encoding to cp850 to prevent silent UnicodeDecodeError,
+         success now true when filtered hops exist even with no visible hops
   v3.4 - Fixed Windows traceroute: split parser into OS-specific methods,
          handle 'Request timed out.' hops, correct IP position parsing,
          fix header line skip, increase per-hop timeout
@@ -69,7 +72,7 @@ except ImportError:
     HAS_REQUESTS = False
 
 # ─── Constants ──────────────────────────────────────────────────────────────
-VERSION = "3.4"
+VERSION = "3.5"
 TOOL_NAME = "SendgikoskiLabs NetCheck"
 
 DEFAULT_HOSTS = [
@@ -89,8 +92,6 @@ MONITOR_INTERVAL = 10            # seconds
 
 OS = platform.system()
 IS_WINDOWS = OS == "Windows"
-print(f"\nPlatform type: {OS}")
-print(f"\nIS_WINDOWS contents: {IS_WINDOWS}")
 
 
 # ─── Data classes ───────────────────────────────────────────────────────────
@@ -279,29 +280,30 @@ class NetDiag:
     @staticmethod
     def traceroute(host: str, max_hops: int = 15) -> TracerouteResult:
         try:
-            # Windows uses tracert; Linux/macOS uses traceroute
-            # Timeout: allow 6s per hop plus 10s buffer to avoid premature kills
             if IS_WINDOWS:
-                cmd = ["tracert", "-h", str(max_hops), host]
-                timeout = max_hops * 6 + 10
-                print(f"\nContents of cmd: {cmd}")
+                # -h = max hops, -w 2000 = wait 2000ms per hop (default is 4000ms)
+                # Reducing -w speeds up traces through filtered hops significantly
+                cmd = ["tracert", "-h", str(max_hops), "-w", "2000", host]
+                # Budget: 2s per hop × max_hops + 30s buffer
+                timeout = max_hops * 2 + 30
+                # Windows tracert outputs in the system codepage (cp850/cp1252)
+                # Using errors='replace' prevents UnicodeDecodeError on non-ASCII
+                encoding = "cp850"
             else:
                 cmd = ["traceroute", "-n", "-m", str(max_hops), host]
                 timeout = max_hops * 5 + 10
-                print(f"\nContents of cmd: {cmd}")
+                encoding = "utf-8"
 
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=timeout
+                cmd, capture_output=True, timeout=timeout,
+                encoding=encoding, errors="replace"
             )
-            print(f"\nContents of result: {result}")
             output = result.stdout
-            print(f"\nContents of output: {output}")
-            stderr = result.stderr
-            print(f"\nContents of stderr: {stderr}")
+            stderr  = result.stderr
 
-            # If stdout is empty, the command likely failed — surface the error
+            # Surface any error from stderr or empty output
             if not output.strip():
-                err_msg = stderr.strip() if stderr.strip() else \
+                err_msg = stderr.strip() if stderr and stderr.strip() else \
                     f"Command produced no output (exit code {result.returncode})"
                 return TracerouteResult(
                     host=host, hops=[], filtered_hops=0,
@@ -317,9 +319,6 @@ class NetDiag:
                     NetDiag._parse_traceroute_linux(output)
 
             # ── NAT / firewall / WSL2 path obscuration detection ────────
-            # Heuristic: only 1-2 visible hops AND significant filtered hops
-            # strongly suggests a NAT layer or hypervisor is eating probes
-            # before they reach the public internet.
             nat_warning = (len(hops) <= 2 and filtered_hops >= 3)
 
             return TracerouteResult(
@@ -328,20 +327,20 @@ class NetDiag:
                 filtered_hops=filtered_hops,
                 slowest_hop=slowest_hop,
                 slowest_ms=slowest_ms,
-                success=bool(hops),
+                success=bool(hops) or filtered_hops > 0,
                 nat_warning=nat_warning,
             )
         except subprocess.TimeoutExpired:
             return TracerouteResult(
                 host=host, hops=[], filtered_hops=0,
-                slowest_hop="Command timed out", slowest_ms=0.0,
-                success=False, nat_warning=False
+                slowest_hop=f"Timed out after {timeout}s — try reducing max hops",
+                slowest_ms=0.0, success=False, nat_warning=False
             )
         except FileNotFoundError:
             cmd_name = "tracert" if IS_WINDOWS else "traceroute"
             return TracerouteResult(
                 host=host, hops=[], filtered_hops=0,
-                slowest_hop=f"'{cmd_name}' not found — is it installed and on PATH?",
+                slowest_hop=f"'{cmd_name}' not found — is it on PATH?",
                 slowest_ms=0.0, success=False, nat_warning=False
             )
         except Exception as e:
@@ -367,11 +366,12 @@ class NetDiag:
           Trace complete.
 
         Key differences from Linux traceroute:
-          - Header spans 2 lines before hop data begins
+          - Two header lines before hop data
           - Latencies formatted as "4 ms" (space before ms)
-          - Timed-out hops say "Request timed out." not "* * *"
-          - IP address appears AFTER latencies (not before)
-          - Lines are indented with spaces
+          - Timed-out hops: "Request timed out." (not "* * *")
+          - IP address appears AFTER latencies
+          - Lines are indented
+          - Some hops show mixed: "4 ms  *  4 ms  192.168.1.1"
         """
         hops = []
         filtered_hops = 0
@@ -383,42 +383,46 @@ class NetDiag:
             if not stripped:
                 continue
 
-            # Skip header lines — only process lines that start with a hop number
+            # Strictly require the line to begin with a hop number (1-999)
+            # This reliably skips all header, footer, and blank lines
             parts = stripped.split()
-            if not parts or not parts[0].isdigit():
+            if not parts:
                 continue
+            try:
+                hop_num = int(parts[0])
+            except ValueError:
+                continue  # Not a hop line — skip header/footer
 
-            hop_num = parts[0]
+            hop_num_str = str(hop_num)
 
-            # Timed-out hop — "Request timed out." appears instead of latencies
-            if "timed out" in stripped.lower() or "request timed out" in stripped.lower():
+            # Timed-out hop — counts as filtered, not as a visible hop
+            if "timed out" in stripped.lower():
                 filtered_hops += 1
                 continue
 
-            # All-star hop — some hops show "* * *" on Windows too
-            if stripped.count("*") >= 3 and not re.search(r"\d+\s+ms", stripped):
-                filtered_hops += 1
-                continue
-
-            # Extract latencies — Windows format: "4 ms" or "4ms"
+            # Extract latencies — Windows: "4 ms" with space before ms
+            # Use \s+ to require at least one space (avoids matching "4ms" edge cases)
             latencies = [
                 float(x)
                 for x in re.findall(r"(\d+(?:\.\d+)?)\s+ms", stripped)
             ]
 
-            # Extract IP — on Windows it appears after the latencies
+            # Extract IP — always the last IPv4 address on the line
             hop_ip = None
-            ip_matches = re.findall(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", stripped)
+            ip_matches = re.findall(
+                r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b", stripped
+            )
             if ip_matches:
-                hop_ip = ip_matches[-1]  # last IP on the line is the hop address
+                hop_ip = ip_matches[-1]
 
-            # Skip lines with no useful data
+            # Pure star hop (no latency, no IP) — count as filtered
             if not latencies and not hop_ip:
+                filtered_hops += 1
                 continue
 
             avg = round(statistics.mean(latencies), 2) if latencies else None
             hop = {
-                "hop": hop_num,
+                "hop": hop_num_str,
                 "ip": hop_ip or "*",
                 "latencies": latencies,
                 "avg_ms": avg,
