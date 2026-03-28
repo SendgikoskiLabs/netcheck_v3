@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SendgikoskiLabs NetCheck v3.1
+SendgikoskiLabs NetCheck v3.6
 ==============================
 A self-contained network diagnostic and monitoring tool.
 
@@ -23,8 +23,8 @@ Features:
   - CSV logging
 
 Changelog:
-  v3.1 - Fixed Ctrl+C traceback in monitor mode (signal handler)
-         Added subnet-aware IP change detection to suppress anycast noise
+  v3.6 - Reduced Windows tracert -w flag from 2000ms to 1000ms to fix timeout
+         on hosts with many filtered hops (e.g. google.com)
   v3.5 - Fixed Windows traceroute: added -w 2000 flag to reduce per-hop wait,
          fixed encoding to cp850 to prevent silent UnicodeDecodeError,
          success now true when filtered hops exist even with no visible hops
@@ -35,6 +35,8 @@ Changelog:
          live host status indicators, dynamic status bar, About tab
   v3.2 - Fixed negative elapsed time in 'all' command
          Added NAT/firewall/WSL2 path-obscuration warning in traceroute results
+  v3.1 - Fixed Ctrl+C traceback in monitor mode (signal handler)
+         Added subnet-aware IP change detection to suppress anycast noise
 
 Requires: Python 3.8+, stdlib only EXCEPT 'requests' (pip install requests)
 Run:
@@ -72,7 +74,7 @@ except ImportError:
     HAS_REQUESTS = False
 
 # ─── Constants ──────────────────────────────────────────────────────────────
-VERSION = "3.5"
+VERSION = "3.6"
 TOOL_NAME = "SendgikoskiLabs NetCheck"
 
 DEFAULT_HOSTS = [
@@ -281,11 +283,12 @@ class NetDiag:
     def traceroute(host: str, max_hops: int = 15) -> TracerouteResult:
         try:
             if IS_WINDOWS:
-                # -h = max hops, -w 2000 = wait 2000ms per hop (default is 4000ms)
-                # Reducing -w speeds up traces through filtered hops significantly
-                cmd = ["tracert", "-h", str(max_hops), "-w", "2000", host]
-                # Budget: 2s per hop × max_hops + 30s buffer
-                timeout = max_hops * 2 + 30
+                # -h = max hops, -w 1000 = wait 1000ms per hop (default is 4000ms)
+                # 1s is sufficient to detect responding hops and cuts worst-case
+                # trace time (all hops filtered) from 60s to ~15s for 15 hops
+                cmd = ["tracert", "-h", str(max_hops), "-w", "1000", host]
+                # Budget: 1.5s per hop × max_hops + 20s buffer
+                timeout = int(max_hops * 1.5) + 20
                 # Windows tracert outputs in the system codepage (cp850/cp1252)
                 # Using errors='replace' prevents UnicodeDecodeError on non-ASCII
                 encoding = "cp850"
