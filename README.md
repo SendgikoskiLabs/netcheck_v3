@@ -321,6 +321,7 @@ DEFAULT_HOSTS = [
 
 | Version | Changes |
 |---|---|
+| **3.7** | v3.7: Cap Windows max_hops to 10 by default, use -w 500 with -w before -h, guarantee timeout covers worst-case 4s/hop, OS-aware GUI default |
 | **3.6** | v3.6: Reduce tracert -w to 1000ms to fix timeout on heavily filtered routes |
 | **3.5** | v3.5: Fix Windows traceroute — cp850 encoding, -w 2000 flag, success on filtered hops |
 | **3.4** | v3.4: Fix Windows traceroute parser — handle tracert output format differences |
