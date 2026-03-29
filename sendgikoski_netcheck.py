@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SendgikoskiLabs NetCheck v3.6
+SendgikoskiLabs NetCheck v3.7
 ==============================
 A self-contained network diagnostic and monitoring tool.
 
@@ -23,6 +23,8 @@ Features:
   - CSV logging
 
 Changelog:
+  v3.7 - Cap Windows max_hops to 10 by default, use -w 500 with -w before -h,
+         guarantee timeout covers worst-case 4s/hop, OS-aware GUI default
   v3.6 - Reduced Windows tracert -w flag from 2000ms to 1000ms to fix timeout
          on hosts with many filtered hops (e.g. google.com)
   v3.5 - Fixed Windows traceroute: added -w 2000 flag to reduce per-hop wait,
@@ -38,13 +40,14 @@ Changelog:
   v3.1 - Fixed Ctrl+C traceback in monitor mode (signal handler)
          Added subnet-aware IP change detection to suppress anycast noise
 
-Requires: Python 3.8+, stdlib only EXCEPT 'requests' (pip install requests)
+Requires: Python 3.8+, stdlib, and 'requests' (pip install requests)
 Run:
-  python sendgikoski_netcheck.py                      # GUI
-  python sendgikoski_netcheck.py ping google.com      # CLI ping
-  python sendgikoski_netcheck.py check google.com     # full single-host check
-  python sendgikoski_netcheck.py all                  # run all default hosts
-  python sendgikoski_netcheck.py monitor              # continuous monitor (CLI)
+  python sendgikoski_netcheck.py                         # GUI
+  python sendgikoski_netcheck.py ping google.com         # CLI ping
+  python sendgikoski_netcheck.py check google.com        # full single-host check
+  python sendgikoski_netcheck.py traceroute google.com   # traceroute
+  python sendgikoski_netcheck.py all                     # run all default hosts
+  python sendgikoski_netcheck.py monitor                 # continuous monitor (CLI)
   python sendgikoski_netcheck.py --help
 """
 
@@ -74,7 +77,7 @@ except ImportError:
     HAS_REQUESTS = False
 
 # ─── Constants ──────────────────────────────────────────────────────────────
-VERSION = "3.6"
+VERSION = "3.7"
 TOOL_NAME = "SendgikoskiLabs NetCheck"
 
 DEFAULT_HOSTS = [
@@ -279,22 +282,38 @@ class NetDiag:
 
     # ── Traceroute ───────────────────────────────────────────────────────────
 
+    # Windows-specific default — lower than Linux because tracert is slower
+    # per hop and -w is not always honoured on all Windows versions
+    WINDOWS_DEFAULT_HOPS = 10
+
     @staticmethod
     def traceroute(host: str, max_hops: int = 15) -> TracerouteResult:
         try:
             if IS_WINDOWS:
-                # -h = max hops, -w 1000 = wait 1000ms per hop (default is 4000ms)
-                # 1s is sufficient to detect responding hops and cuts worst-case
-                # trace time (all hops filtered) from 60s to ~15s for 15 hops
-                cmd = ["tracert", "-h", str(max_hops), "-w", "1000", host]
-                # Budget: 1.5s per hop × max_hops + 20s buffer
-                timeout = int(max_hops * 1.5) + 20
-                # Windows tracert outputs in the system codepage (cp850/cp1252)
-                # Using errors='replace' prevents UnicodeDecodeError on non-ASCII
+                # Cap max_hops for Windows to keep traces within a sane timeout.
+                # tracert defaults to 4s per unresponsive hop; -w reduces this
+                # but is not reliably honoured on all Windows versions.
+                # We cap at WINDOWS_DEFAULT_HOPS when called with the global
+                # default of 15 to prevent runaway traces on filtered routes.
+                effective_hops = min(max_hops, NetDiag.WINDOWS_DEFAULT_HOPS) \
+                    if max_hops == 15 else max_hops
+
+                # Try -w 500ms — aggressive but sufficient for LAN/internet hops.
+                # Argument order: tracert -w <ms> -h <hops> <host>
+                # Some Windows versions require -w before -h.
+                cmd = ["tracert", "-w", "500", "-h", str(effective_hops), host]
+
+                # Worst case: -w is ignored, tracert uses 4s default per hop.
+                # Budget = 4s × hops + 30s buffer to guarantee completion.
+                timeout = effective_hops * 4 + 30
+
+                # Windows tracert outputs in the system codepage (cp850/cp1252).
+                # Explicit encoding + errors='replace' prevents UnicodeDecodeError.
                 encoding = "cp850"
             else:
-                cmd = ["traceroute", "-n", "-m", str(max_hops), host]
-                timeout = max_hops * 5 + 10
+                effective_hops = max_hops
+                cmd = ["traceroute", "-n", "-m", str(effective_hops), host]
+                timeout = effective_hops * 5 + 10
                 encoding = "utf-8"
 
             result = subprocess.run(
@@ -334,9 +353,12 @@ class NetDiag:
                 nat_warning=nat_warning,
             )
         except subprocess.TimeoutExpired:
+            hint = (f"tracert used {effective_hops} hops × up to 4s each. "
+                    f"Try: traceroute google.com -m 6") if IS_WINDOWS else \
+                   f"Try reducing max hops below {effective_hops}"
             return TracerouteResult(
                 host=host, hops=[], filtered_hops=0,
-                slowest_hop=f"Timed out after {timeout}s — try reducing max hops",
+                slowest_hop=f"Timed out after {timeout}s — {hint}",
                 slowest_ms=0.0, success=False, nat_warning=False
             )
         except FileNotFoundError:
@@ -1207,7 +1229,8 @@ def launch_gui():
     toolbar_label(tb3, "Host:")
     trace_host = toolbar_entry(tb3, 26, "google.com")
     toolbar_label(tb3, "Max hops:")
-    trace_hops = toolbar_entry(tb3, 4, "15")
+    _trace_hops_default = "10" if IS_WINDOWS else "15"
+    trace_hops = toolbar_entry(tb3, 4, _trace_hops_default)
     toolbar_sep(tb3)
 
     trace_out = make_output(make_content(tab_trace))
@@ -1216,9 +1239,9 @@ def launch_gui():
     def do_trace(*_):
         host = trace_host.get().strip()
         try:
-            hops = int(trace_hops.get().strip() or "15")
+            hops = int(trace_hops.get().strip() or _trace_hops_default)
         except ValueError:
-            hops = 15
+            hops = int(_trace_hops_default)
         if not host:
             return
         clear_out(trace_out)
