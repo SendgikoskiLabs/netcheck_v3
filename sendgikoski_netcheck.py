@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SendgikoskiLabs NetCheck v3.7
+SendgikoskiLabs NetCheck v3.8
 ==============================
 A self-contained network diagnostic and monitoring tool.
 
@@ -17,12 +17,17 @@ Features:
       - Subnet-aware IP change detection (suppresses anycast rotation noise)
       - ASN change detection
       - Route change detection
+  - InfluxDB export (v1.x and v2.x, auto-detected):
+      - Config file (influx.cfg), env vars, or CLI flags
+      - Priority: CLI flags > influx.cfg > environment variables
   - CLI interface (argparse subcommands)
   - GUI interface (tkinter, no installation required)
   - JSON output support
   - CSV logging
 
 Changelog:
+  v3.8 - Added InfluxDB export to monitor mode (v1.x + v2.x auto-detect)
+         Config via influx.cfg, env vars, or --influx-* CLI flags
   v3.7 - Cap Windows max_hops to 10 by default, use -w 500 with -w before -h,
          guarantee timeout covers worst-case 4s/hop, OS-aware GUI default
   v3.6 - Reduced Windows tracert -w flag from 2000ms to 1000ms to fix timeout
@@ -40,14 +45,14 @@ Changelog:
   v3.1 - Fixed Ctrl+C traceback in monitor mode (signal handler)
          Added subnet-aware IP change detection to suppress anycast noise
 
-Requires: Python 3.8+, stdlib, and 'requests' (pip install requests)
+Requires: Python 3.8+, stdlib only EXCEPT 'requests' (pip install requests)
 Run:
-  python sendgikoski_netcheck.py                         # GUI
-  python sendgikoski_netcheck.py ping google.com         # CLI ping
-  python sendgikoski_netcheck.py check google.com        # full single-host check
-  python sendgikoski_netcheck.py traceroute google.com   # traceroute
-  python sendgikoski_netcheck.py all                     # run all default hosts
-  python sendgikoski_netcheck.py monitor                 # continuous monitor (CLI)
+  python sendgikoski_netcheck.py                      # GUI
+  python sendgikoski_netcheck.py ping google.com      # CLI ping
+  python sendgikoski_netcheck.py check google.com     # full single-host check
+  python sendgikoski_netcheck.py all                  # run all default hosts
+  python sendgikoski_netcheck.py monitor              # continuous monitor (CLI)
+  python sendgikoski_netcheck.py monitor --influx     # monitor + InfluxDB export
   python sendgikoski_netcheck.py --help
 """
 
@@ -63,6 +68,8 @@ import signal
 import platform
 import statistics
 import argparse
+import configparser
+import os
 from collections import defaultdict
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
@@ -77,7 +84,7 @@ except ImportError:
     HAS_REQUESTS = False
 
 # ─── Constants ──────────────────────────────────────────────────────────────
-VERSION = "3.7"
+VERSION = "3.8"
 TOOL_NAME = "SendgikoskiLabs NetCheck"
 
 DEFAULT_HOSTS = [
@@ -773,9 +780,198 @@ def log_check(r: HostCheckResult):
         ])
 
 
+# ─── InfluxDB export ─────────────────────────────────────────────────────────
+
+INFLUX_CFG_FILE = BASE_DIR / "influx.cfg"
+
+# ── Default field names ───────────────────────────────────────────────────────
+INFLUX_MEASUREMENT = "netcheck"
+
+
+def _load_influx_config(args) -> dict:
+    """
+    Build the InfluxDB connection config by merging three sources in priority order:
+      1. CLI flags (highest priority)
+      2. influx.cfg file
+      3. Environment variables (lowest priority)
+
+    Returns a dict with keys:
+      url, token, org, bucket,          # v2.x
+      username, password, database,     # v1.x
+      version                           # "2" or "1" (auto-detected)
+    """
+    # ── Step 1: Start with environment variables ─────────────────────────────
+    cfg = {
+        "url":      os.environ.get("INFLUX_URL",      "http://localhost:8086"),
+        "token":    os.environ.get("INFLUX_TOKEN",    ""),
+        "org":      os.environ.get("INFLUX_ORG",      ""),
+        "bucket":   os.environ.get("INFLUX_BUCKET",   "netcheck"),
+        "username": os.environ.get("INFLUX_USERNAME", ""),
+        "password": os.environ.get("INFLUX_PASSWORD", ""),
+        "database": os.environ.get("INFLUX_DATABASE", "netcheck"),
+    }
+
+    # ── Step 2: Override with influx.cfg if it exists ────────────────────────
+    if INFLUX_CFG_FILE.exists():
+        parser = configparser.ConfigParser()
+        parser.read(INFLUX_CFG_FILE)
+        section = "influxdb"
+        if parser.has_section(section):
+            for key in cfg:
+                if parser.has_option(section, key):
+                    cfg[key] = parser.get(section, key).strip()
+
+    # ── Step 3: Override with CLI flags if provided ──────────────────────────
+    flag_map = {
+        "influx_url":      "url",
+        "influx_token":    "token",
+        "influx_org":      "org",
+        "influx_bucket":   "bucket",
+        "influx_username": "username",
+        "influx_password": "password",
+        "influx_database": "database",
+    }
+    for flag, key in flag_map.items():
+        val = getattr(args, flag, None)
+        if val:
+            cfg[key] = val
+
+    # ── Auto-detect version ──────────────────────────────────────────────────
+    # If a token is present → v2.x; otherwise assume v1.x
+    cfg["version"] = "2" if cfg["token"] else "1"
+
+    return cfg
+
+
+def _build_line_protocol(r: "HostCheckResult") -> str:
+    """
+    Convert a HostCheckResult to InfluxDB line protocol.
+
+    Format:
+      measurement,tag_key=tag_val field_key=field_val[,...] timestamp_ns
+
+    Tags (indexed, low-cardinality):
+      host, asn, provider
+
+    Fields (numeric measurements):
+      dns_ms, tcp_ms, tls_ms, http_status, total_ms, success
+
+    Timestamp: nanoseconds since Unix epoch (InfluxDB standard)
+    """
+    # Parse ISO timestamp from result
+    try:
+        dt = datetime.fromisoformat(r.timestamp)
+        ts_ns = int(dt.timestamp() * 1_000_000_000)
+    except Exception:
+        ts_ns = int(time.time() * 1_000_000_000)
+
+    # Tags — escape spaces and commas per line protocol spec
+    def _tag(v: str) -> str:
+        return v.replace(" ", "\\ ").replace(",", "\\,").replace("=", "\\=")
+
+    tags = (
+        f"host={_tag(r.host)}"
+        f",asn={_tag(r.asn or 'unknown')}"
+        f",provider={_tag(r.provider or 'unknown')}"
+    )
+
+    # Fields — only include non-None values
+    fields = []
+    if r.dns_ms  is not None: fields.append(f"dns_ms={r.dns_ms}")
+    if r.tcp_ms  is not None: fields.append(f"tcp_ms={r.tcp_ms}")
+    if r.tls_ms  is not None: fields.append(f"tls_ms={r.tls_ms}")
+    if r.http_status is not None: fields.append(f"http_status={r.http_status}i")
+    if r.total_ms is not None: fields.append(f"total_ms={r.total_ms}")
+    fields.append(f"success={'true' if r.success else 'false'}")
+
+    if not fields:
+        return ""
+
+    return f"{INFLUX_MEASUREMENT},{tags} {','.join(fields)} {ts_ns}"
+
+
+def _write_to_influx(line: str, cfg: dict) -> bool:
+    """
+    POST a single line protocol record to InfluxDB.
+    Returns True on success, False on failure.
+    Requires 'requests' library.
+    """
+    if not HAS_REQUESTS or not line:
+        return False
+
+    try:
+        if cfg["version"] == "2":
+            # InfluxDB 2.x — token auth, /api/v2/write endpoint
+            url = f"{cfg['url'].rstrip('/')}/api/v2/write"
+            headers = {
+                "Authorization": f"Token {cfg['token']}",
+                "Content-Type":  "text/plain; charset=utf-8",
+            }
+            params = {
+                "org":       cfg["org"],
+                "bucket":    cfg["bucket"],
+                "precision": "ns",
+            }
+        else:
+            # InfluxDB 1.x — basic auth or no auth, /write endpoint
+            url = f"{cfg['url'].rstrip('/')}/write"
+            headers = {"Content-Type": "text/plain; charset=utf-8"}
+            params  = {"db": cfg["database"], "precision": "ns"}
+            if cfg["username"]:
+                headers["Authorization"] = (
+                    "Basic " + __import__("base64").b64encode(
+                        f"{cfg['username']}:{cfg['password']}".encode()
+                    ).decode()
+                )
+
+        response = _requests.post(
+            url, params=params, headers=headers,
+            data=line.encode("utf-8"), timeout=5
+        )
+        # InfluxDB returns 204 No Content on success
+        return response.status_code in (200, 204)
+
+    except Exception as e:
+        # Non-fatal — log to stderr but don't crash the monitor
+        print(f"\n⚠️  InfluxDB write failed: {e}", file=sys.stderr)
+        return False
+
+
+def influx_test_connection(cfg: dict) -> tuple:
+    """
+    Test the InfluxDB connection before starting the monitor.
+    Returns (success: bool, message: str)
+    """
+    if not HAS_REQUESTS:
+        return False, "'requests' library required for InfluxDB export"
+
+    try:
+        if cfg["version"] == "2":
+            url     = f"{cfg['url'].rstrip('/')}/api/v2/buckets"
+            headers = {"Authorization": f"Token {cfg['token']}"}
+            params  = {"org": cfg["org"]}
+        else:
+            url     = f"{cfg['url'].rstrip('/')}/ping"
+            headers = {}
+            params  = {}
+
+        r = _requests.get(url, headers=headers, params=params, timeout=5)
+
+        if cfg["version"] == "2" and r.status_code == 200:
+            return True, f"InfluxDB v2.x connected  org={cfg['org']}  bucket={cfg['bucket']}"
+        elif cfg["version"] == "1" and r.status_code == 204:
+            return True, f"InfluxDB v1.x connected  database={cfg['database']}"
+        else:
+            return False, f"InfluxDB returned HTTP {r.status_code}: {r.text[:120]}"
+
+    except Exception as e:
+        return False, f"InfluxDB connection failed: {e}"
+
+
 # ─── Monitor loop (CLI) ──────────────────────────────────────────────────────
 
-def monitor_cli(hosts: List[str], interval: int = MONITOR_INTERVAL):
+def monitor_cli(hosts: List[str], interval: int = MONITOR_INTERVAL,
+                influx_cfg: Optional[dict] = None):
     """Continuous monitoring loop with clean Ctrl+C shutdown via signal handler."""
     state = MonitorState()
 
@@ -788,7 +984,18 @@ def monitor_cli(hosts: List[str], interval: int = MONITOR_INTERVAL):
 
     print(f"\n{TOOL_NAME} v{VERSION}  —  Monitor Mode")
     print(f"Hosts: {', '.join(hosts)}")
-    print(f"Interval: {interval}s   (Ctrl+C to stop)\n")
+    print(f"Interval: {interval}s   (Ctrl+C to stop)")
+
+    # ── InfluxDB startup banner ──────────────────────────────────────────────
+    if influx_cfg:
+        ok, msg = influx_test_connection(influx_cfg)
+        if ok:
+            print(f"InfluxDB: ✓  {msg}")
+        else:
+            print(f"InfluxDB: ✗  {msg}")
+            print("         Continuing without InfluxDB export.")
+            influx_cfg = None   # disable export for this session
+    print()
 
     while True:
         for host in hosts:
@@ -796,8 +1003,13 @@ def monitor_cli(hosts: List[str], interval: int = MONITOR_INTERVAL):
             state.record(result)
             log_check(result)
 
+            # ── InfluxDB export ─────────────────────────────────────────
+            if influx_cfg:
+                line = _build_line_protocol(result)
+                _write_to_influx(line, influx_cfg)
+
             # ── Change detection ────────────────────────────────────────
-            ip_alert = state.check_ip_change(host, result.ip)
+            ip_alert  = state.check_ip_change(host, result.ip)
             asn_alert = state.check_asn_change(host, result.asn)
             route = [h["ip"] for h in NetDiag.traceroute(host, max_hops=10).hops]
             route_changes = state.check_route_change(host, route)
@@ -836,12 +1048,13 @@ def monitor_cli(hosts: List[str], interval: int = MONITOR_INTERVAL):
                 print(f"\n🚨 PACKET LOSS: {host}  {stats['loss']:.0f}%")
 
             ts = datetime.now().strftime("%H:%M:%S")
+            influx_tag = " →influx✓" if influx_cfg else ""
             print(
                 f"  [{ts}]  {host:<22}  "
                 f"dns={result.dns_ms or '?':>6}ms  "
                 f"tcp={result.tcp_ms or '?':>6}ms  "
                 f"tls={result.tls_ms or '?':>6}ms  "
-                f"http={_http_label(result.http_status)}"
+                f"http={_http_label(result.http_status)}{influx_tag}"
             )
 
         print(f"\n{'─'*70}")
@@ -900,6 +1113,26 @@ Examples:
     )
     p.add_argument("-i", "--interval", type=int, default=MONITOR_INTERVAL)
 
+    # InfluxDB export flags
+    p.add_argument(
+        "--influx", action="store_true",
+        help="Enable InfluxDB export (configure via influx.cfg, env vars, or flags below)"
+    )
+    p.add_argument("--influx-url",      default="", metavar="URL",
+                   help="InfluxDB URL (e.g. http://localhost:8086)")
+    p.add_argument("--influx-token",    default="", metavar="TOKEN",
+                   help="API token (InfluxDB v2.x)")
+    p.add_argument("--influx-org",      default="", metavar="ORG",
+                   help="Organization (InfluxDB v2.x)")
+    p.add_argument("--influx-bucket",   default="", metavar="BUCKET",
+                   help="Bucket (v2.x) or database (v1.x), default: netcheck")
+    p.add_argument("--influx-username", default="", metavar="USER",
+                   help="Username (InfluxDB v1.x)")
+    p.add_argument("--influx-password", default="", metavar="PASS",
+                   help="Password (InfluxDB v1.x)")
+    p.add_argument("--influx-database", default="", metavar="DB",
+                   help="Database name (InfluxDB v1.x), default: netcheck")
+
     return parser
 
 
@@ -934,7 +1167,8 @@ def run_cli(args):
         print(f"Completed in {time.time() - t0:.2f}s\n")
 
     elif args.command == "monitor":
-        monitor_cli(args.hosts, args.interval)
+        influx_cfg = _load_influx_config(args) if args.influx else None
+        monitor_cli(args.hosts, args.interval, influx_cfg=influx_cfg)
 
 
 # ─── GUI ─────────────────────────────────────────────────────────────────────
