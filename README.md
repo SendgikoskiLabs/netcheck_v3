@@ -2,7 +2,7 @@
 
 **A professional, self-contained network diagnostic and monitoring tool.**
 
-[![Version](https://img.shields.io/badge/version-3.6-89b4fa?style=flat-square)](https://github.com/SendgikoskiLabs/netcheck_v3)
+[![Version](https://img.shields.io/badge/version-3.8-89b4fa?style=flat-square)](https://github.com/SendgikoskiLabs/netcheck_v3)
 [![Python](https://img.shields.io/badge/python-3.8%2B-cba6f7?style=flat-square)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-a6e3a1?style=flat-square)]()
 [![License](https://img.shields.io/badge/license-MIT-f9e2af?style=flat-square)]()
@@ -48,6 +48,10 @@ Built by [Alan Sendgikoski](https://www.linkedin.com/in/alansendgikoski/) as par
 ### CSV Log File
 ![Monitor Log File](docs/screenshots/gui_logfile.png)
 *All checks are automatically logged to `logs/netcheck_log.csv` — ready for analysis, trend reporting, or InfluxDB import.*
+
+### InfluxDB Dashboard
+![netcheck Dashboard](docs/screenshots/influxdb_dashboard.png)
+*A pre-built 6-panel InfluxDB dashboard — TCP Latency by Host, TLS Handshake by Host, DNS Latency by Host, Total Transaction Time, HTTP Status (table), Success Rate (table.)*
 
 ---
 
@@ -303,6 +307,27 @@ python sendgikoski_netcheck.py check github.com --json
 
 ---
 
+## InfluxDB Dashboard
+
+A pre-built 6-panel InfluxDB dashboard template is included in the `dashboard/` folder.
+
+**Panels:**
+- TCP Latency by Host
+- TLS Handshake by Host
+- DNS Latency by Host
+- Total Transaction Time
+- HTTP Status (table)
+- Success Rate (table)
+
+**To use:**
+- ***Note:*** InfluxDB must be fully configured with the JSON file before Step 3 below.
+1. In InfluxDB UI → Dashboards → Import Dashboard
+2. Select `dashboard/netcheck_dashboard.json`
+3. Start `python sendgikoski_netcheck.py monitor --influx` to stream data into InfluxDB
+4. Your dashboard is live instantly
+
+---
+
 ## Default Hosts
 
 The three default hosts used by `all` and `monitor` commands can be changed by editing the `DEFAULT_HOSTS` list near the top of the script:
@@ -321,6 +346,7 @@ DEFAULT_HOSTS = [
 
 | Version | Changes |
 |---|---|
+| **3.8** | v3.8: Added InfluxDB export to monitor mode (v1.x + v2.x auto-detect). Config via influx.cfg, env vars, or --influx-* CLI flags |
 | **3.7** | v3.7: Cap Windows max_hops to 10 by default, use -w 500 with -w before -h, guarantee timeout covers worst-case 4s/hop, OS-aware GUI default |
 | **3.6** | v3.6: Reduce tracert -w to 1000ms to fix timeout on heavily filtered routes |
 | **3.5** | v3.5: Fix Windows traceroute — cp850 encoding, -w 2000 flag, success on filtered hops |
