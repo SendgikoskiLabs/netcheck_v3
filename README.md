@@ -1,5 +1,8 @@
 # SendgikoskiLabs NetCheck
 
+> ⚠️ This repository has been archived. 
+> Development continues at [SendgikoskiLabs/netcheck](https://github.com/SendgikoskiLabs/netcheck).
+
 **A professional, self-contained network diagnostic and monitoring tool.**
 
 [![Version](https://img.shields.io/badge/version-3.8-89b4fa?style=flat-square)](https://github.com/SendgikoskiLabs/netcheck_v3)
